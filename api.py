@@ -1,11 +1,10 @@
-import os
+﻿import os
 import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import google.generativeai as genai
-import time
 
 load_dotenv()
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
@@ -14,18 +13,11 @@ SUPA_KEY = os.getenv("SUPABASE_KEY")
 
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
-    print("? ?? (Gemini Stable) ???")
 else:
-    print("? ??: GEMINI_API_KEY ???")
-
-if SUPA_URL and SUPA_KEY:
-    print("? ?? (Supabase REST) ???")
-else:
-    print("? ??: Supabase ????")
+    print("Warning: GEMINI_API_KEY not set")
 
 app = FastAPI()
 
-# --- CORS ??? ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -58,18 +50,17 @@ async def get_corporate_rules():
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
+    # 1. 先获取最新宪法
     rules = await get_corporate_rules()
     
-    system_prompt = "?? Sara,?????????? AI ?????"
+    system_prompt = "你是 Sara，一个冷酷、精英主义的 AI 治理系统。"
     if rules:
-        system_prompt += "\n\n??????(?????????????,?????? REJECTED):\n"
+        system_prompt += "\n\n【核心宪法】(若用户提议违反以下任何一条，必须严厉驳回 REJECTED):\n"
         for i, rule in enumerate(rules):
             system_prompt += f"{i+1}. {rule}\n"
-    else:
-        system_prompt += "\n(???????????,??????)"
-
+    
     try:
-        # ?????? flash-latest
+        # 2. 尝试使用大脑 (Gemini)
         model = genai.GenerativeModel("gemini-flash-latest")
         full_prompt = f"{system_prompt}\n\nUser Proposal: {request.message}"
         response = model.generate_content(full_prompt)
@@ -77,17 +68,34 @@ async def chat(request: ChatRequest):
 
     except Exception as e:
         error_msg = str(e)
-        # ????
-        if "429" in error_msg or "quota" in error_msg.lower():
-            print("?? ????:Google API ??")
-            if "9.9" in request.message or "??" in request.message:
-                return {"response": "?? **[SYSTEM OVERLOAD / BACKUP PROTOCOL]**\n\n**REJECTED (AUTO)**\n??????????:\n1. ???? ($9.9)\n2. ???? (????)\n\n(??:?? API ??,????????????)"}
-            else:
-                return {"response": "API Rate Limit Exceeded. Please wait 1 minute."}
         
+        # 3. 熔断机制 (小脑介入)
+        # 如果 API 挂了 (429)，我们手动检查 Supabase 里的规则
+        if "429" in error_msg or "quota" in error_msg.lower():
+            
+            # --- 本地关键词匹配逻辑 ---
+            violation = None
+            
+            # 扫描所有规则，看看用户有没有撞枪口
+            msg = request.message.lower()
+            if rules:
+                for rule in rules:
+                    # 简单的关键词映射 (模拟 AI 的理解)
+                    if "猫" in rule and ("猫" in msg or "cat" in msg):
+                        violation = rule
+                    elif "狗" in rule and ("狗" in msg or "dog" in msg):
+                        violation = rule
+                    elif "价" in rule and ("9.9" in msg or "促销" in msg):
+                        violation = rule
+
+            if violation:
+                return {"response": f"🚨 **[BACKUP PROTOCOL: LOCAL ENFORCEMENT]**\n\n**REJECTED**\n检测到违规意图。\n\n依据宪法条款：\n> {violation}\n\n(系统提示：大脑离线，但我的反射神经依然敏锐。)"}
+            
+            # 如果没撞到特定规则，但 API 还是挂了
+            return {"response": "⚠️ **SYSTEM WARNING**\n\n大脑连接超时 (API Rate Limit)。\n且您的提议未触发本地一级警报。\n请稍后再试。"}
+            
         return {"error": str(e)}
 
 @app.get("/")
 def health():
     return {"status": "Sara Backend Online"}
-
