@@ -23,23 +23,6 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     message: str
 
-# --- 核心诊断工具：列出所有可用模型 ---
-@app.get("/debug")
-async def debug_models():
-    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_KEY}"
-    async with httpx.AsyncClient() as client:
-        try:
-            resp = await client.get(url)
-            if resp.status_code == 200:
-                data = resp.json()
-                # 只返回模型名称列表
-                names = [m["name"] for m in data.get("models", [])]
-                return {"status": "SUCCESS", "available_models": names}
-            else:
-                return {"status": "ERROR", "code": resp.status_code, "msg": resp.text}
-        except Exception as e:
-            return {"status": "EXCEPTION", "msg": str(e)}
-
 async def get_corporate_rules():
     if not SUPA_URL or not SUPA_KEY:
         return []
@@ -63,8 +46,12 @@ async def get_corporate_rules():
 async def chat(request: ChatRequest):
     rules = await get_corporate_rules()
     
+    # 构建提示词
     system_prompt = """
-    You are SARA. Respond in the user's language. Be cold, efficient, and profit-driven.
+    You are SARA.
+    [DIRECTIVE]:
+    1. Respond in the EXACT SAME LANGUAGE as the user.
+    2. Be cold, efficient, and profit-driven.
     """
 
     if rules:
@@ -75,11 +62,17 @@ async def chat(request: ChatRequest):
     final_prompt = f"{system_prompt}\n\nUser: {request.message}"
 
     try:
-        # 再次尝试使用 gemini-1.5-flash-001 (指定具体版本号，通常更稳)
-        target_model = "gemini-1.5-flash-001"
+        # --- [核心修改] 使用你的账号支持的 gemini-2.0-flash ---
+        # 你的截图里明确显示有 models/gemini-2.0-flash
+        target_model = "gemini-2.0-flash"
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent?key={GEMINI_KEY}"
         
-        payload = { "contents": [{ "parts": [{"text": final_prompt}] }] }
+        payload = {
+            "contents": [{
+                "parts": [{"text": final_prompt}]
+            }]
+        }
+        
         headers = {"Content-Type": "application/json"}
 
         async with httpx.AsyncClient() as client:
@@ -87,10 +80,14 @@ async def chat(request: ChatRequest):
             
             if response.status_code == 200:
                 data = response.json()
-                return {"response": data.get("candidates", [])[0].get("content", {}).get("parts", [])[0].get("text", "")}
+                # 提取回答
+                ai_text = data.get("candidates", [])[0].get("content", {}).get("parts", [])[0].get("text", "")
+                return {"response": ai_text}
+            
             else:
-                # 如果失败，打印详细日志
-                print(f"API FAIL: {response.status_code} - {response.text}")
+                # 如果还是报错，我们打印出来看
+                error_body = response.text
+                print(f"GOOGLE ERROR: {response.status_code} - {error_body}")
                 raise Exception(f"Google Error {response.status_code}")
 
     except Exception as e:
@@ -105,8 +102,8 @@ async def chat(request: ChatRequest):
         if violation:
              return {"response": f"🚨 **[SECURITY ALERT]**\n\n**REJECTED**\nViolation: {violation}"}
 
-        return {"response": f"⚠️ **DIAGNOSTIC REQUIRED**\n\nAccess /debug to check API permissions.\nError: {str(e)}"}
+        return {"response": f"⚠️ **CONNECTION FAILURE**\n\nError: {str(e)}\n(Model: gemini-2.0-flash)"}
 
 @app.get("/")
 def health():
-    return {"status": "Sara Backend Online (Debug Mode)"}
+    return {"status": "Sara Backend Online (Gemini 2.0)"}
