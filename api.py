@@ -12,7 +12,6 @@ SUPA_URL = os.getenv("SUPABASE_URL")
 SUPA_KEY = os.getenv("SUPABASE_KEY")
 
 if GEMINI_KEY:
-    # 使用更稳定的 1.5 Flash 模型
     genai.configure(api_key=GEMINI_KEY)
 else:
     print("Warning: GEMINI_API_KEY not set")
@@ -33,7 +32,7 @@ class ChatRequest(BaseModel):
 async def get_corporate_rules():
     if not SUPA_URL or not SUPA_KEY:
         return []
-    # 获取数据库规则 (即使规则是中文写的，Gemini 也能理解并跨语言执行)
+    # 获取数据库规则
     url = f"{SUPA_URL}/rest/v1/corporate_rules?select=rule_content"
     headers = {
         "apikey": SUPA_KEY,
@@ -54,7 +53,7 @@ async def get_corporate_rules():
 async def chat(request: ChatRequest):
     rules = await get_corporate_rules()
     
-    # --- 核心修改：英文指令 + 多语言适配要求 ---
+    # System Prompt (保持英文，多语言支持)
     system_prompt = """
     You are SARA (Systematic Artificial Rationality Algorithm).
     You are a cold, efficient, elitist AI governance system.
@@ -71,7 +70,9 @@ async def chat(request: ChatRequest):
             system_prompt += f"{i+1}. {rule}\n"
     
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        # --- 关键修改：换回最稳的 gemini-pro ---
+        model = genai.GenerativeModel("gemini-pro")
+        
         full_prompt = f"{system_prompt}\n\nUser Input: {request.message}"
         response = model.generate_content(full_prompt)
         return {"response": response.text}
@@ -79,15 +80,13 @@ async def chat(request: ChatRequest):
     except Exception as e:
         error_msg = str(e)
         
-        # 熔断机制 (改为国际化英文版)
+        # 熔断机制
         if "429" in error_msg or "quota" in error_msg.lower():
             violation = None
             msg = request.message.lower()
             
-            # 简单的多语言关键词匹配
             if rules:
                 for rule in rules:
-                    # 中文关键词
                     if "猫" in rule and ("猫" in msg or "cat" in msg):
                         violation = rule
                     elif "狗" in rule and ("狗" in msg or "dog" in msg):
@@ -104,4 +103,4 @@ async def chat(request: ChatRequest):
 
 @app.get("/")
 def health():
-    return {"status": "Sara Backend Online (Global Mode)"}
+    return {"status": "Sara Backend Online (Stable Mode)"}
