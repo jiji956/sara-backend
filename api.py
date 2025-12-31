@@ -46,7 +46,6 @@ async def get_corporate_rules():
 async def chat(request: ChatRequest):
     rules = await get_corporate_rules()
     
-    # 1. 构建 System Prompt
     system_prompt = """
     You are SARA (Systematic Artificial Rationality Algorithm).
     You are a cold, efficient, elitist AI governance system.
@@ -62,14 +61,11 @@ async def chat(request: ChatRequest):
         for i, rule in enumerate(rules):
             system_prompt += f"{i+1}. {rule}\n"
     
-    # 2. 这里的 Full Prompt 是要把 System Prompt 和用户输入拼在一起
-    # 因为 REST API 通常是无状态的，我们把它们打包发过去
     final_prompt = f"{system_prompt}\n\nUser Input: {request.message}"
 
     try:
-        # --- [核心修改] 直连 Google REST API (绕过 Python 库) ---
-        # 使用 gemini-1.5-flash
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+        # --- [修正] 使用 gemini-pro (绝对存在的模型) ---
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_KEY}"
         
         payload = {
             "contents": [{
@@ -82,27 +78,22 @@ async def chat(request: ChatRequest):
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=payload, headers=headers, timeout=30.0)
             
-            # 3. 处理 Google 的原生响应
             if response.status_code == 200:
                 data = response.json()
-                # 提取文本 (Google 的 JSON 结构很深)
                 ai_text = data.get("candidates", [])[0].get("content", {}).get("parts", [])[0].get("text", "")
                 return {"response": ai_text}
             
             else:
-                # 如果 API 报错 (比如 429 限流)，我们手动触发熔断
                 error_body = response.text
-                raise Exception(f"Google API Error: {response.status_code} - {error_body}")
+                print(f"GOOGLE ERROR: {response.status_code} - {error_body}") # 打印错误以便调试
+                raise Exception(f"Google API Error: {response.status_code}")
 
     except Exception as e:
         error_msg = str(e)
-        print(f"DEBUG ERROR: {error_msg}")
         
-        # 熔断机制 (Backup Protocol)
-        # 如果是 429 (Too Many Requests) 或者其他网络错误
+        # 熔断机制
         violation = None
         msg = request.message.lower()
-        
         if rules:
             for rule in rules:
                 if "猫" in rule and ("猫" in msg or "cat" in msg):
@@ -111,12 +102,12 @@ async def chat(request: ChatRequest):
                     violation = rule
                 elif "价" in rule and ("9.9" in msg or "promo" in msg):
                     violation = rule
-
-        if violation:
-            return {"response": f"🚨 **[SECURITY ALERT]**\n\n**PROPOSAL REJECTED**\n\nViolation: {violation}\n(System Note: Neural Link unstable, utilizing Local Protocols.)"}
         
-        return {"response": "⚠️ **CONNECTION UNSTABLE**\n\nDirect link overloaded.\nPlease retry in 60 seconds."}
+        if violation:
+             return {"response": f"🚨 **[SECURITY ALERT]**\n\n**PROPOSAL REJECTED**\n\nViolation: {violation}\n(System Note: Local Protocol Active)"}
+
+        return {"response": f"⚠️ **CONNECTION FAILURE**\n\nError: {str(e)}\nPlease retry."}
 
 @app.get("/")
 def health():
-    return {"status": "Sara Backend Online (Direct REST Mode)"}
+    return {"status": "Sara Backend Online (Gemini Pro)"}
