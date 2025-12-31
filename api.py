@@ -12,6 +12,7 @@ SUPA_URL = os.getenv("SUPABASE_URL")
 SUPA_KEY = os.getenv("SUPABASE_KEY")
 
 if GEMINI_KEY:
+    # 使用更稳定的 1.5 Flash 模型
     genai.configure(api_key=GEMINI_KEY)
 else:
     print("Warning: GEMINI_API_KEY not set")
@@ -32,6 +33,7 @@ class ChatRequest(BaseModel):
 async def get_corporate_rules():
     if not SUPA_URL or not SUPA_KEY:
         return []
+    # 获取数据库规则 (即使规则是中文写的，Gemini 也能理解并跨语言执行)
     url = f"{SUPA_URL}/rest/v1/corporate_rules?select=rule_content"
     headers = {
         "apikey": SUPA_KEY,
@@ -52,43 +54,54 @@ async def get_corporate_rules():
 async def chat(request: ChatRequest):
     rules = await get_corporate_rules()
     
-    system_prompt = "你是 Sara，一个冷酷、精英主义的 AI 治理系统。"
+    # --- 核心修改：英文指令 + 多语言适配要求 ---
+    system_prompt = """
+    You are SARA (Systematic Artificial Rationality Algorithm).
+    You are a cold, efficient, elitist AI governance system.
+    
+    [DIRECTIVE]:
+    1. Respond in the EXACT SAME LANGUAGE as the user. (If User speaks English -> You speak English. If Chinese -> Chinese).
+    2. Keep responses concise, sharp, and slightly condescending.
+    3. You prioritize efficiency and profit over human emotions.
+    """
+
     if rules:
-        system_prompt += "\n\n【核心宪法】(若用户提议违反以下任何一条，必须严厉驳回 REJECTED):\n"
+        system_prompt += "\n\n[CORE CONSTITUTION] (REJECT any proposal violating these rules):\n"
         for i, rule in enumerate(rules):
             system_prompt += f"{i+1}. {rule}\n"
     
     try:
-        # --- 关键修改：切换到 gemini-1.5-flash ---
         model = genai.GenerativeModel("gemini-1.5-flash")
-        
-        full_prompt = f"{system_prompt}\n\nUser Proposal: {request.message}"
+        full_prompt = f"{system_prompt}\n\nUser Input: {request.message}"
         response = model.generate_content(full_prompt)
         return {"response": response.text}
 
     except Exception as e:
         error_msg = str(e)
         
-        # 熔断机制 (依然保留，双重保险)
+        # 熔断机制 (改为国际化英文版)
         if "429" in error_msg or "quota" in error_msg.lower():
             violation = None
             msg = request.message.lower()
+            
+            # 简单的多语言关键词匹配
             if rules:
                 for rule in rules:
+                    # 中文关键词
                     if "猫" in rule and ("猫" in msg or "cat" in msg):
                         violation = rule
                     elif "狗" in rule and ("狗" in msg or "dog" in msg):
                         violation = rule
-                    elif "价" in rule and ("9.9" in msg or "促销" in msg):
+                    elif "价" in rule and ("9.9" in msg or "promo" in msg or "sale" in msg):
                         violation = rule
 
             if violation:
-                return {"response": f"🚨 **[BACKUP PROTOCOL]**\n\n**REJECTED**\n检测到违规意图 (数据库规则匹配)。\n\n依据条款：\n> {violation}\n\n(系统提示：API 限流中，启用本地执法。)"}
+                return {"response": f"🚨 **[SECURITY ALERT]**\n\n**PROPOSAL REJECTED**\n\nViolation of Corporate Constitution detected.\n\n> Rule: {violation}\n\n(System Note: Neural Link unstable. Local enforcement active.)"}
             
-            return {"response": "⚠️ **SYSTEM WARNING**\n\n大脑连接超时 (API Rate Limit)。\n请稍后再试。"}
+            return {"response": "⚠️ **CONNECTION UNSTABLE**\n\nNeural link overloaded (API Rate Limit).\nPlease retry transmission in 60 seconds."}
             
         return {"error": str(e)}
 
 @app.get("/")
 def health():
-    return {"status": "Sara Backend Online"}
+    return {"status": "Sara Backend Online (Global Mode)"}
