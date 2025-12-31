@@ -50,7 +50,6 @@ async def get_corporate_rules():
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    # 1. 先获取最新宪法
     rules = await get_corporate_rules()
     
     system_prompt = "你是 Sara，一个冷酷、精英主义的 AI 治理系统。"
@@ -60,8 +59,9 @@ async def chat(request: ChatRequest):
             system_prompt += f"{i+1}. {rule}\n"
     
     try:
-        # 2. 尝试使用大脑 (Gemini)
-        model = genai.GenerativeModel("gemini-flash-latest")
+        # --- 关键修改：切换到 gemini-1.5-flash ---
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        
         full_prompt = f"{system_prompt}\n\nUser Proposal: {request.message}"
         response = model.generate_content(full_prompt)
         return {"response": response.text}
@@ -69,18 +69,12 @@ async def chat(request: ChatRequest):
     except Exception as e:
         error_msg = str(e)
         
-        # 3. 熔断机制 (小脑介入)
-        # 如果 API 挂了 (429)，我们手动检查 Supabase 里的规则
+        # 熔断机制 (依然保留，双重保险)
         if "429" in error_msg or "quota" in error_msg.lower():
-            
-            # --- 本地关键词匹配逻辑 ---
             violation = None
-            
-            # 扫描所有规则，看看用户有没有撞枪口
             msg = request.message.lower()
             if rules:
                 for rule in rules:
-                    # 简单的关键词映射 (模拟 AI 的理解)
                     if "猫" in rule and ("猫" in msg or "cat" in msg):
                         violation = rule
                     elif "狗" in rule and ("狗" in msg or "dog" in msg):
@@ -89,10 +83,9 @@ async def chat(request: ChatRequest):
                         violation = rule
 
             if violation:
-                return {"response": f"🚨 **[BACKUP PROTOCOL: LOCAL ENFORCEMENT]**\n\n**REJECTED**\n检测到违规意图。\n\n依据宪法条款：\n> {violation}\n\n(系统提示：大脑离线，但我的反射神经依然敏锐。)"}
+                return {"response": f"🚨 **[BACKUP PROTOCOL]**\n\n**REJECTED**\n检测到违规意图 (数据库规则匹配)。\n\n依据条款：\n> {violation}\n\n(系统提示：API 限流中，启用本地执法。)"}
             
-            # 如果没撞到特定规则，但 API 还是挂了
-            return {"response": "⚠️ **SYSTEM WARNING**\n\n大脑连接超时 (API Rate Limit)。\n且您的提议未触发本地一级警报。\n请稍后再试。"}
+            return {"response": "⚠️ **SYSTEM WARNING**\n\n大脑连接超时 (API Rate Limit)。\n请稍后再试。"}
             
         return {"error": str(e)}
 
