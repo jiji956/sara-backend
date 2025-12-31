@@ -13,8 +13,6 @@ SUPA_KEY = os.getenv("SUPABASE_KEY")
 
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
-else:
-    print("Warning: GEMINI_API_KEY not set")
 
 app = FastAPI()
 
@@ -32,7 +30,6 @@ class ChatRequest(BaseModel):
 async def get_corporate_rules():
     if not SUPA_URL or not SUPA_KEY:
         return []
-    # 获取数据库规则
     url = f"{SUPA_URL}/rest/v1/corporate_rules?select=rule_content"
     headers = {
         "apikey": SUPA_KEY,
@@ -53,7 +50,6 @@ async def get_corporate_rules():
 async def chat(request: ChatRequest):
     rules = await get_corporate_rules()
     
-    # System Prompt (保持英文，多语言支持)
     system_prompt = """
     You are SARA (Systematic Artificial Rationality Algorithm).
     You are a cold, efficient, elitist AI governance system.
@@ -70,8 +66,8 @@ async def chat(request: ChatRequest):
             system_prompt += f"{i+1}. {rule}\n"
     
     try:
-        # --- 关键修改：换回最稳的 gemini-pro ---
-        model = genai.GenerativeModel("gemini-pro")
+        # --- 这里的 flash 绝对能用了，因为我们升级了库 ---
+        model = genai.GenerativeModel("gemini-1.5-flash")
         
         full_prompt = f"{system_prompt}\n\nUser Input: {request.message}"
         response = model.generate_content(full_prompt)
@@ -79,28 +75,22 @@ async def chat(request: ChatRequest):
 
     except Exception as e:
         error_msg = str(e)
-        
-        # 熔断机制
         if "429" in error_msg or "quota" in error_msg.lower():
             violation = None
             msg = request.message.lower()
-            
             if rules:
                 for rule in rules:
                     if "猫" in rule and ("猫" in msg or "cat" in msg):
                         violation = rule
                     elif "狗" in rule and ("狗" in msg or "dog" in msg):
                         violation = rule
-                    elif "价" in rule and ("9.9" in msg or "promo" in msg or "sale" in msg):
+                    elif "价" in rule and ("9.9" in msg or "promo" in msg):
                         violation = rule
-
             if violation:
-                return {"response": f"🚨 **[SECURITY ALERT]**\n\n**PROPOSAL REJECTED**\n\nViolation of Corporate Constitution detected.\n\n> Rule: {violation}\n\n(System Note: Neural Link unstable. Local enforcement active.)"}
-            
-            return {"response": "⚠️ **CONNECTION UNSTABLE**\n\nNeural link overloaded (API Rate Limit).\nPlease retry transmission in 60 seconds."}
-            
+                return {"response": f"🚨 **[SECURITY ALERT]**\n\n**PROPOSAL REJECTED**\n\nViolation: {violation}\n(Backup Protocol Active)"}
+            return {"response": "⚠️ **CONNECTION UNSTABLE**\n\nNeural link overloaded (API Rate Limit).\nPlease retry in 60 seconds."}
         return {"error": str(e)}
 
 @app.get("/")
 def health():
-    return {"status": "Sara Backend Online (Stable Mode)"}
+    return {"status": "Sara Backend Online (Flash Updated)"}
