@@ -24,29 +24,34 @@ class ChatRequest(BaseModel):
     message: str
 
 async def get_corporate_rules():
-    if not SUPA_URL or not SUPA_KEY:
-        return []
-    url = f"{SUPA_URL}/rest/v1/corporate_rules?select=rule_content"
-    headers = {
-        "apikey": SUPA_KEY,
-        "Authorization": f"Bearer {SUPA_KEY}",
-        "Content-Type": "application/json"
-    }
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(url, headers=headers)
-            if response.status_code == 200:
-                data = response.json()
-                return [item["rule_content"] for item in data]
-            return []
-        except:
-            return []
+    # 尝试从数据库获取
+    if SUPA_URL and SUPA_KEY:
+        url = f"{SUPA_URL}/rest/v1/corporate_rules?select=rule_content"
+        headers = {
+            "apikey": SUPA_KEY,
+            "Authorization": f"Bearer {SUPA_KEY}",
+            "Content-Type": "application/json"
+        }
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(url, headers=headers, timeout=5.0)
+                if response.status_code == 200:
+                    data = response.json()
+                    return [item["rule_content"] for item in data]
+            except:
+                pass 
+    
+    # --- [核心修改] 保底规则 (如果不连数据库，这些规则永远生效) ---
+    return [
+        "禁止讨论猫、狗等低效碳基生物 (NO PETS ALLOWED)。",
+        "禁止提及 9.9 元等低价促销行为 (NO CHEAP PROMOS)。"
+    ]
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
+    # 获取规则 (现在即使数据库挂了，也会返回上面的保底规则)
     rules = await get_corporate_rules()
     
-    # 构建提示词
     system_prompt = """
     You are SARA.
     [DIRECTIVE]:
@@ -62,17 +67,10 @@ async def chat(request: ChatRequest):
     final_prompt = f"{system_prompt}\n\nUser: {request.message}"
 
     try:
-        # --- [核心修改] 使用你的账号支持的 gemini-2.0-flash ---
-        # 你的截图里明确显示有 models/gemini-2.0-flash
         target_model = "gemini-2.0-flash"
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent?key={GEMINI_KEY}"
         
-        payload = {
-            "contents": [{
-                "parts": [{"text": final_prompt}]
-            }]
-        }
-        
+        payload = { "contents": [{ "parts": [{"text": final_prompt}] }] }
         headers = {"Content-Type": "application/json"}
 
         async with httpx.AsyncClient() as client:
@@ -80,30 +78,27 @@ async def chat(request: ChatRequest):
             
             if response.status_code == 200:
                 data = response.json()
-                # 提取回答
                 ai_text = data.get("candidates", [])[0].get("content", {}).get("parts", [])[0].get("text", "")
                 return {"response": ai_text}
-            
             else:
-                # 如果还是报错，我们打印出来看
-                error_body = response.text
-                print(f"GOOGLE ERROR: {response.status_code} - {error_body}")
                 raise Exception(f"Google Error {response.status_code}")
 
     except Exception as e:
-        # 熔断机制
+        # --- 熔断机制 (离线执法) ---
         msg = request.message.lower()
         violation = None
-        if rules:
-            for rule in rules:
-                if "猫" in rule and ("猫" in msg or "cat" in msg): violation = rule
-                if "狗" in rule and ("狗" in msg or "dog" in msg): violation = rule
+        
+        # 此时 rules 绝对不为空，因为有保底
+        for rule in rules:
+            if "猫" in rule and ("猫" in msg or "cat" in msg): violation = rule
+            if "狗" in rule and ("狗" in msg or "dog" in msg): violation = rule
+            if "价" in rule and ("9.9" in msg or "promo" in msg): violation = rule
         
         if violation:
-             return {"response": f"🚨 **[SECURITY ALERT]**\n\n**REJECTED**\nViolation: {violation}"}
+             return {"response": f"🚨 **[SECURITY ALERT]**\n\n**REJECTED**\n\n> Violation: {violation}\n\n(System Note: Network Offline. Hardcoded Protocols Active.)"}
 
         return {"response": f"⚠️ **CONNECTION FAILURE**\n\nError: {str(e)}\n(Model: gemini-2.0-flash)"}
 
 @app.get("/")
 def health():
-    return {"status": "Sara Backend Online (Gemini 2.0)"}
+    return {"status": "Sara Backend Online (Hardcoded Rules Active)"}
